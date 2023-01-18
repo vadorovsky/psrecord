@@ -32,12 +32,20 @@ import argparse
 children = []
 
 
-def get_percent(process):
-    return process.cpu_percent()
+def get_percent(process=None):
+    import psutil
+    if process is not None:
+        return process.cpu_percent()
+    return psutil.cpu_percent()
 
 
 def get_memory(process):
     return process.memory_info()
+
+
+def get_virtual_memory():
+    import psutil
+    return psutil.virtual_memory()
 
 
 def all_children(pr):
@@ -61,7 +69,7 @@ def main():
     parser = argparse.ArgumentParser(
         description='Record CPU and memory usage for a process')
 
-    parser.add_argument('process_id_or_command', type=str,
+    parser.add_argument('--process', type=str,
                         help='the process id or command')
 
     parser.add_argument('--log', type=str,
@@ -85,36 +93,54 @@ def main():
                              'in a slower maximum sampling rate).',
                         action='store_true')
 
+    # TODO(vadorovsky): Make this prettier / more well thought.
+    parser.add_argument('--virtual-memory',
+                        help='use virtual memory in plot',
+                        action='store_true')
+
     args = parser.parse_args()
 
-    # Attach to process
-    try:
-        pid = int(args.process_id_or_command)
-        print("Attaching to process {0}".format(pid))
-        sprocess = None
-    except Exception:
-        import subprocess
-        command = args.process_id_or_command
-        print("Starting up command '{0}' and attaching to process"
-              .format(command))
-        sprocess = subprocess.Popen(command, shell=True)
-        pid = sprocess.pid
+    pid = None
+    if args.process is not None:
+        # Attach to process
+        try:
+            pid = int(args.process)
+            print("Attaching to process {0}".format(pid))
+            sprocess = None
+        except Exception:
+            import subprocess
+            command = args.process
+            print("Starting up command '{0}' and attaching to process"
+                  .format(command))
+            sprocess = subprocess.Popen(command, shell=True)
+            pid = sprocess.pid
+
+    interval = None
+    if args.interval is not None:
+        interval = args.interval
+    else:
+        # Set a default interval for system-wide profiling. Gathering
+        # system-wide CPU usage without intervals provides weird results (almost
+        # always either 0.0 or 100.0).
+        if args.process is None:
+            interval = 0.1
 
     monitor(pid, logfile=args.log, plot=args.plot, duration=args.duration,
-            interval=args.interval, include_children=args.include_children)
+            interval=interval, include_children=args.include_children,
+            virtual_memory=args.virtual_memory)
 
-    if sprocess is not None:
+    if args.process is not None and sprocess is not None:
         sprocess.kill()
 
 
-def monitor(pid, logfile=None, plot=None, duration=None, interval=None,
-            include_children=False):
+def monitor(pid=None, logfile=None, plot=None, duration=None, interval=None,
+            include_children=False, virtual_memory=False):
 
     # We import psutil here so that the module can be imported even if psutil
     # is not present (for example if accessing the version)
     import psutil
 
-    pr = psutil.Process(pid)
+    pr = psutil.Process(pid) if pid is not None else None
 
     # Record start time
     start_time = time.time()
@@ -142,34 +168,47 @@ def monitor(pid, logfile=None, plot=None, duration=None, interval=None,
             # Find current time
             current_time = time.time()
 
-            try:
-                pr_status = pr.status()
-            except TypeError:  # psutil < 2.0
-                pr_status = pr.status
-            except psutil.NoSuchProcess:  # pragma: no cover
-                break
+            if pr is not None:
+                try:
+                    pr_status = pr.status()
+                except TypeError:  # psutil < 2.0
+                    pr_status = pr.status
+                except psutil.NoSuchProcess:  # pragma: no cover
+                    break
 
-            # Check if process status indicates we should exit
-            if pr_status in [psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD]:
-                print("Process finished ({0:.2f} seconds)"
-                      .format(current_time - start_time))
-                break
+                # Check if process status indicates we should exit
+                if pr_status in [psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD]:
+                    print("Process finished ({0:.2f} seconds)"
+                          .format(current_time - start_time))
+                    break
 
             # Check if we have reached the maximum time
             if duration is not None and current_time - start_time > duration:
                 break
 
             # Get current CPU and memory
-            try:
-                current_cpu = get_percent(pr)
-                current_mem = get_memory(pr)
-            except Exception:
-                break
-            current_mem_real = current_mem.rss / 1024. ** 2
-            current_mem_virtual = current_mem.vms / 1024. ** 2
+            current_cpu = None
+            current_mem_real = None
+            current_mem_virtual = None
+            if pr is not None:
+                try:
+                    current_cpu = get_percent(pr)
+                    current_mem = get_memory(pr)
+                except Exception:
+                    break
+                current_mem_real = current_mem.rss / 1024. ** 2
+                current_mem_virtual = current_mem.vms / 1024. ** 2
+            else:
+                try:
+                    current_cpu = get_percent()
+                    current_mem = get_virtual_memory()
+                except Exception:
+                    break
+                current_mem_real = current_mem.active / 1024. ** 2
+                current_mem_virtual = current_mem.used / 1024. ** 2
 
             # Get information for children
-            if include_children:
+            if pr is not None and include_children:
                 for child in all_children(pr):
                     try:
                         current_cpu += get_percent(child)
@@ -220,10 +259,18 @@ def monitor(pid, logfile=None, plot=None, duration=None, interval=None,
 
             ax2 = ax.twinx()
 
-            ax2.plot(log['times'], log['mem_real'], '-', lw=1, color='b')
-            ax2.set_ylim(0., max(log['mem_real']) * 1.2)
+            # TODO(vadorovsky): So far virtual memory makes more sense for
+            # system-wide profiling, but that needs more investigation.
+            if virtual_memory:
+                ax2.plot(log['times'], log['mem_virtual'], '-', lw=1, color='b')
+                ax2.set_ylim(0., max(log['mem_virtual']) * 1.2)
 
-            ax2.set_ylabel('Real Memory (MB)', color='b')
+                ax2.set_ylabel('Virtual Memory (MB)', color='b')
+            else:
+                ax2.plot(log['times'], log['mem_real'], '-', lw=1, color='b')
+                ax2.set_ylim(0., max(log['mem_real']) * 1.2)
+
+                ax2.set_ylabel('Real Memory (MB)', color='b')
 
             ax.grid()
 
