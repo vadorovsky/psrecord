@@ -103,6 +103,12 @@ def main():
                         help='only plot cpu usage',
                         action='store_true')
 
+    parser.add_argument('--bump-cpu', type=float,
+                        help='bump cpu usage by specified value')
+
+    parser.add_argument('--bump-memory', type=int,
+                        help='bump memory usage by specified value')
+
     args = parser.parse_args()
 
     pid = None
@@ -132,14 +138,16 @@ def main():
 
     monitor(pid, logfile=args.log, plot=args.plot, duration=args.duration,
             interval=interval, include_children=args.include_children,
-            virtual_memory=args.virtual_memory, only_cpu=args.only_cpu)
+            virtual_memory=args.virtual_memory, only_cpu=args.only_cpu,
+            bump_cpu=args.bump_cpu, bump_memory=args.bump_memory)
 
     if args.process is not None and sprocess is not None:
         sprocess.kill()
 
 
 def monitor(pid=None, logfile=None, plot=None, duration=None, interval=None,
-            include_children=False, virtual_memory=False, only_cpu=False):
+            include_children=False, virtual_memory=False, only_cpu=False,
+            bump_cpu=None, bump_memory=None):
 
     # We import psutil here so that the module can be imported even if psutil
     # is not present (for example if accessing the version)
@@ -211,6 +219,15 @@ def monitor(pid=None, logfile=None, plot=None, duration=None, interval=None,
                     break
                 current_mem_real = current_mem.active / 1024. ** 2
                 current_mem_virtual = current_mem.used / 1024. ** 2
+
+            # Bump CPU usage
+            if bump_cpu is not None:
+                current_cpu += bump_cpu
+
+            # Bump memory usage
+            if bump_memory is not None:
+                current_mem_real += bump_memory
+                current_mem_virtual += bump_memory
 
             # Get information for children
             if pr is not None and include_children:
