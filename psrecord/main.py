@@ -98,6 +98,11 @@ def main():
                         help='use virtual memory in plot',
                         action='store_true')
 
+    # TODO(vadorovsky): Make this prettier / more well thought.
+    parser.add_argument('--only-cpu',
+                        help='only plot cpu usage',
+                        action='store_true')
+
     args = parser.parse_args()
 
     pid = None
@@ -127,14 +132,14 @@ def main():
 
     monitor(pid, logfile=args.log, plot=args.plot, duration=args.duration,
             interval=interval, include_children=args.include_children,
-            virtual_memory=args.virtual_memory)
+            virtual_memory=args.virtual_memory, only_cpu=args.only_cpu)
 
     if args.process is not None and sprocess is not None:
         sprocess.kill()
 
 
 def monitor(pid=None, logfile=None, plot=None, duration=None, interval=None,
-            include_children=False, virtual_memory=False):
+            include_children=False, virtual_memory=False, only_cpu=False):
 
     # We import psutil here so that the module can be imported even if psutil
     # is not present (for example if accessing the version)
@@ -257,20 +262,21 @@ def monitor(pid=None, logfile=None, plot=None, duration=None, interval=None,
             ax.set_xlabel('time (s)')
             ax.set_ylim(0., max(log['cpu']) * 1.2)
 
-            ax2 = ax.twinx()
+            if not only_cpu:
+                ax2 = ax.twinx()
 
-            # TODO(vadorovsky): So far virtual memory makes more sense for
-            # system-wide profiling, but that needs more investigation.
-            if virtual_memory:
-                ax2.plot(log['times'], log['mem_virtual'], '-', lw=1, color='b')
-                ax2.set_ylim(0., max(log['mem_virtual']) * 1.2)
+                # TODO(vadorovsky): So far virtual memory makes more sense for
+                # system-wide profiling, but that needs more investigation.
+                if virtual_memory:
+                    ax2.plot(log['times'], log['mem_virtual'], '-', lw=1, color='b')
+                    ax2.set_ylim(0., max(log['mem_virtual']) * 1.2)
 
-                ax2.set_ylabel('Virtual Memory (MB)', color='b')
-            else:
-                ax2.plot(log['times'], log['mem_real'], '-', lw=1, color='b')
-                ax2.set_ylim(0., max(log['mem_real']) * 1.2)
+                    ax2.set_ylabel('Virtual Memory (MB)', color='b')
+                else:
+                    ax2.plot(log['times'], log['mem_real'], '-', lw=1, color='b')
+                    ax2.set_ylim(0., max(log['mem_real']) * 1.2)
 
-                ax2.set_ylabel('Real Memory (MB)', color='b')
+                    ax2.set_ylabel('Real Memory (MB)', color='b')
 
             ax.grid()
 
